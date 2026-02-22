@@ -72,6 +72,17 @@ def generate_dashboard(output_path: str | None = None) -> str:
         FROM jobs GROUP BY site ORDER BY high_fit DESC, total DESC
     """).fetchall()
 
+    # Jobs ready for manual application (tailored resume + cover letter, not yet applied)
+    ready_jobs = conn.execute("""
+        SELECT url, title, company, fit_score,
+               application_url, tailored_resume_path, cover_letter_path
+        FROM jobs
+        WHERE tailored_resume_path IS NOT NULL
+          AND cover_letter_path IS NOT NULL
+          AND applied_at IS NULL
+        ORDER BY fit_score DESC, discovered_at DESC
+    """).fetchall()
+
     # All scored jobs (5+), ordered by score desc
     jobs = conn.execute("""
         SELECT url, title, salary, description, location, site, strategy,
@@ -195,6 +206,62 @@ def generate_dashboard(output_path: str | None = None) -> str:
     if current_score is not None:
         job_sections += "</div>"
 
+    # Ready-to-apply rows
+    ready_rows_html = ""
+    for rj in ready_jobs:
+        score = rj["fit_score"] or 0
+        score_color = "#10b981" if score >= 8 else "#f59e0b" if score >= 6 else "#ef4444"
+        apply_url = escape(rj["application_url"] or rj["url"] or "")
+        resume_path = rj["tailored_resume_path"] or ""
+        cover_path = rj["cover_letter_path"] or ""
+        resume_uri = Path(resume_path).as_uri() if resume_path else ""
+        cover_uri = Path(cover_path).as_uri() if cover_path else ""
+        resume_name = escape(Path(resume_path).name) if resume_path else "—"
+        cover_name = escape(Path(cover_path).name) if cover_path else "—"
+        title = escape(rj["title"] or "Untitled")
+        company = escape(rj["company"] or "")
+
+        apply_btn = (
+            f'<a href="{escape(apply_url)}" target="_blank" class="rta-btn rta-apply">Apply →</a>'
+            if apply_url else '<span class="rta-btn rta-no-url">No URL</span>'
+        )
+        resume_btn = (
+            f'<a href="{escape(resume_uri)}" target="_blank" class="rta-btn rta-file">Resume</a>'
+            if resume_uri else ""
+        )
+        cover_btn = (
+            f'<a href="{escape(cover_uri)}" target="_blank" class="rta-btn rta-file">Cover</a>'
+            if cover_uri else ""
+        )
+
+        ready_rows_html += f"""
+        <tr class="rta-row" data-score="{score}">
+          <td><span class="rta-score" style="background:{score_color}">{score}</span></td>
+          <td class="rta-title">{title}</td>
+          <td class="rta-company">{company}</td>
+          <td class="rta-files">{resume_btn} {cover_btn}</td>
+          <td class="rta-actions">{apply_btn}</td>
+        </tr>"""
+
+    ready_section = ""
+    if ready_jobs:
+        ready_section = f"""
+<section id="ready-section">
+  <h2 class="section-title">
+    <span class="rta-count-badge">{len(ready_jobs)}</span>
+    Ready to Apply
+  </h2>
+  <p class="section-sub">Tailored resume &amp; cover letter prepared. Click <strong>Apply</strong> to open the application form, then <strong>Resume</strong>/<strong>Cover</strong> to view your documents.</p>
+  <table class="rta-table">
+    <thead>
+      <tr>
+        <th>Fit</th><th>Role</th><th>Company</th><th>Documents</th><th>Action</th>
+      </tr>
+    </thead>
+    <tbody>{ready_rows_html}</tbody>
+  </table>
+</section>"""
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -291,11 +358,36 @@ def generate_dashboard(output_path: str | None = None) -> str:
   .hidden {{ display: none !important; }}
   .job-count {{ color: #94a3b8; font-size: 0.85rem; margin-bottom: 1rem; }}
 
+  /* Ready to Apply section */
+  #ready-section {{ margin-bottom: 2.5rem; }}
+  .section-title {{ font-size: 1.4rem; font-weight: 700; display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; }}
+  .section-sub {{ color: #94a3b8; font-size: 0.85rem; margin-bottom: 1rem; }}
+  .rta-count-badge {{ background: #10b981; color: #0f172a; font-size: 0.85rem; font-weight: 700; padding: 0.15rem 0.55rem; border-radius: 20px; }}
+  .rta-table {{ width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }}
+  .rta-table thead tr {{ background: #0f172a; }}
+  .rta-table th {{ text-align: left; padding: 0.7rem 1rem; font-size: 0.78rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }}
+  .rta-row {{ border-bottom: 1px solid #334155; transition: background 0.1s; }}
+  .rta-row:last-child {{ border-bottom: none; }}
+  .rta-row:hover {{ background: #263145; }}
+  .rta-row td {{ padding: 0.7rem 1rem; vertical-align: middle; }}
+  .rta-score {{ display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem; border-radius: 6px; color: #0f172a; font-weight: 700; font-size: 0.85rem; }}
+  .rta-title {{ font-weight: 600; font-size: 0.9rem; color: #e2e8f0; }}
+  .rta-company {{ color: #94a3b8; font-size: 0.85rem; }}
+  .rta-files {{ display: flex; gap: 0.4rem; flex-wrap: wrap; }}
+  .rta-actions {{ white-space: nowrap; }}
+  .rta-btn {{ display: inline-block; font-size: 0.78rem; font-weight: 600; padding: 0.3rem 0.7rem; border-radius: 6px; text-decoration: none; cursor: pointer; }}
+  .rta-apply {{ background: #10b981; color: #0f172a; }}
+  .rta-apply:hover {{ background: #34d399; }}
+  .rta-file {{ background: #1e3a5f; color: #93c5fd; border: 1px solid #1d4ed833; }}
+  .rta-file:hover {{ background: #1d4ed833; }}
+  .rta-no-url {{ background: #334155; color: #64748b; }}
+
   @media (max-width: 768px) {{
     .summary {{ grid-template-columns: repeat(2, 1fr); }}
     .score-section {{ grid-template-columns: 1fr; }}
     .job-grid {{ grid-template-columns: 1fr; }}
     body {{ padding: 1rem; }}
+    .rta-table {{ font-size: 0.8rem; }}
   }}
 </style>
 </head>
@@ -310,6 +402,8 @@ def generate_dashboard(output_path: str | None = None) -> str:
   <div class="stat-card stat-scored"><div class="stat-num">{scored}</div><div class="stat-label">Scored by LLM</div></div>
   <div class="stat-card stat-high"><div class="stat-num">{high_fit}</div><div class="stat-label">Strong Fit (7+)</div></div>
 </div>
+
+{ready_section}
 
 <div class="filters">
   <span class="filter-label">Score:</span>
