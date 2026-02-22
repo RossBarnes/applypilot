@@ -20,25 +20,27 @@ log = logging.getLogger(__name__)
 
 # ── Scoring Prompt ────────────────────────────────────────────────────────
 
-SCORE_PROMPT = """You are a job fit evaluator. Given a candidate's resume and a job description, score how well the candidate fits the role.
+SCORE_PROMPT = """You are an executive search evaluator. Given a candidate's resume and a job description, score how well the candidate fits the role.
 
 SCORING CRITERIA:
-- 9-10: Perfect match. Candidate has direct experience in nearly all required skills and qualifications.
-- 7-8: Strong match. Candidate has most required skills, minor gaps easily bridged.
-- 5-6: Moderate match. Candidate has some relevant skills but missing key requirements.
-- 3-4: Weak match. Significant skill gaps, would need substantial ramp-up.
-- 1-2: Poor match. Completely different field or experience level.
+- 9-10: Perfect match. Candidate's seniority, domain, and mandate align almost exactly.
+- 7-8: Strong match. Candidate fits the level and most of the mandate; minor gaps easily bridged.
+- 5-6: Moderate match. Relevant background but notable gaps in seniority, domain, or scope.
+- 3-4: Weak match. Significant mismatch in level, sector, or core mandate.
+- 1-2: Poor match. Wrong level or unrelated field entirely.
 
-IMPORTANT FACTORS:
-- Weight technical skills heavily (programming languages, frameworks, tools)
-- Consider transferable experience (automation, scripting, API work)
-- Factor in the candidate's project experience
-- Be realistic about experience level vs. job requirements (years of experience, seniority)
+IMPORTANT FACTORS (in priority order):
+- Leadership scale: team size, org scope, P&L ownership, board/investor exposure
+- Seniority alignment: is this genuinely a C-suite / VP+ role with real authority?
+- AI / technology mandate: does the role require leading AI strategy or transformation?
+- Sector fit: does the candidate's industry background match or transfer well?
+- Company stage and size: does it match the candidate's experience (enterprise, scale-up, PE-backed, etc.)?
+- Do NOT weight individual programming languages or hands-on technical tools heavily for senior roles
 
 RESPOND IN EXACTLY THIS FORMAT (no other text):
 SCORE: [1-10]
 KEYWORDS: [comma-separated ATS keywords from the job description that match or could match the candidate]
-REASONING: [2-3 sentences explaining the score]"""
+REASONING: [2-3 sentences explaining the score, focusing on leadership fit and mandate alignment]"""
 
 
 def _parse_score_response(response: str) -> dict:
@@ -82,7 +84,7 @@ def score_job(resume_text: str, job: dict) -> dict:
     """
     job_text = (
         f"TITLE: {job['title']}\n"
-        f"COMPANY: {job['site']}\n"
+        f"SOURCE: {job['site']}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )
