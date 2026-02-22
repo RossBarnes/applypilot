@@ -10,6 +10,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from applypilot.config import COVER_LETTER_DIR, RESUME_PATH, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
@@ -201,7 +202,7 @@ def run_cover_letters(min_score: int = 7, limit: int = 20) -> dict:
         {"generated": int, "errors": int, "elapsed": float}
     """
     profile = load_profile()
-    resume_text = RESUME_PATH.read_text(encoding="utf-8")
+    master_resume_text = RESUME_PATH.read_text(encoding="utf-8")
     conn = get_connection()
 
     # Fetch jobs that have tailored resumes but no cover letter yet
@@ -237,6 +238,13 @@ def run_cover_letters(min_score: int = 7, limit: int = 20) -> dict:
     for job in jobs:
         completed += 1
         try:
+            # Use tailored resume if available; fall back to master resume
+            tailored_path = job.get("tailored_resume_path")
+            try:
+                resume_text = Path(tailored_path).read_text(encoding="utf-8") if tailored_path else master_resume_text
+            except OSError:
+                resume_text = master_resume_text
+
             letter = generate_cover_letter(resume_text, job, profile)
 
             # Build safe filename prefix
