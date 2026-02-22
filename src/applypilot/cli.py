@@ -88,12 +88,12 @@ def run(
     stream: bool = typer.Option(False, "--stream", help="Run stages concurrently (streaming mode)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview stages without executing."),
 ) -> None:
-    """Run pipeline stages: discover, enrich, score, tailor, cover, pdf."""
+    """Run pipeline stages. Defaults to discover, enrich, score. Use 'all' for the full pipeline including tailoring and auto-apply prep."""
     _bootstrap()
 
     from applypilot.pipeline import run_pipeline
 
-    stage_list = stages if stages else ["all"]
+    stage_list = stages if stages else ["discover", "enrich", "score"]
 
     # Validate stage names
     for s in stage_list:
