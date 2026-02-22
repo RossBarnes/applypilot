@@ -88,6 +88,7 @@ def _setup_profile() -> dict:
     console.print("\n[bold cyan]Personal Information[/bold cyan]")
     profile["personal"] = {
         "full_name": Prompt.ask("Full name"),
+        "preferred_name": Prompt.ask("Preferred first name (used in cover letter sign-offs, e.g. Ross)", default=""),
         "email": Prompt.ask("Email address"),
         "phone": Prompt.ask("Phone number", default=""),
         "city": Prompt.ask("City"),
@@ -135,15 +136,26 @@ def _setup_profile() -> dict:
     profile["voice"] = career_level
 
     # -- Skills Boundary --
-    console.print("\n[bold cyan]Skills[/bold cyan] (comma-separated)")
-    langs = Prompt.ask("Programming languages", default="")
-    frameworks = Prompt.ask("Frameworks & libraries", default="")
-    tools = Prompt.ask("Tools & platforms (e.g. Docker, AWS, Git)", default="")
-    profile["skills_boundary"] = {
-        "programming_languages": [s.strip() for s in langs.split(",") if s.strip()],
-        "frameworks": [s.strip() for s in frameworks.split(",") if s.strip()],
-        "tools": [s.strip() for s in tools.split(",") if s.strip()],
-    }
+    if career_level == "executive":
+        console.print("\n[bold cyan]Skills & Capabilities[/bold cyan] (comma-separated)")
+        domains = Prompt.ask("Leadership domains (e.g. AI/ML, Platform Engineering, Digital Transformation)", default="")
+        verticals = Prompt.ask("Industry verticals (e.g. FinTech, SaaS, Enterprise, PE-backed)", default="")
+        capabilities = Prompt.ask("Business capabilities (e.g. P&L ownership, Board reporting, M&A, Fundraising)", default="")
+        profile["skills_boundary"] = {
+            "leadership_domains": [s.strip() for s in domains.split(",") if s.strip()],
+            "industry_verticals": [s.strip() for s in verticals.split(",") if s.strip()],
+            "business_capabilities": [s.strip() for s in capabilities.split(",") if s.strip()],
+        }
+    else:
+        console.print("\n[bold cyan]Skills[/bold cyan] (comma-separated)")
+        langs = Prompt.ask("Programming languages", default="")
+        frameworks = Prompt.ask("Frameworks & libraries", default="")
+        tools = Prompt.ask("Tools & platforms (e.g. Docker, AWS, Git)", default="")
+        profile["skills_boundary"] = {
+            "programming_languages": [s.strip() for s in langs.split(",") if s.strip()],
+            "frameworks": [s.strip() for s in frameworks.split(",") if s.strip()],
+            "tools": [s.strip() for s in tools.split(",") if s.strip()],
+        }
 
     # -- Resume Facts (preserved truths for tailoring) --
     console.print("\n[bold cyan]Resume Facts[/bold cyan]")

@@ -102,13 +102,22 @@ def _build_tailor_prompt(profile: dict) -> str:
 
     # Build the output schema example as a plain string (avoids f-string brace conflicts)
     education_val = f"{school} | {education_level}" if school else education_level
+    if voice == "executive":
+        projects_example = '"key_initiatives":[{"header":"Initiative Name","subtitle":"Domain | Dates","bullets":["bullet 1","bullet 2"]}],'
+    else:
+        projects_example = '"projects":[{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}],'
     output_example = (
         '{"title":"Role Title","summary":"2-3 tailored sentences.",'
         f'"skills":{skills_schema_str},'
         '"experience":[{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}],'
-        '"projects":[{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}],'
-        f'"education":"{education_val}"}}'
+        + projects_example
+        + f'"education":"{education_val}"}}'
     )
+
+    if voice == "executive":
+        projects_rule = "KEY INITIATIVES: Include the 2-3 most strategically relevant initiatives. Each should show business scope, mandate, and measurable outcome."
+    else:
+        projects_rule = "PROJECTS: Reorder by relevance. Drop irrelevant projects entirely."
 
     return f"""{persona}
 
@@ -131,7 +140,7 @@ SKILLS: Reorder each category so the job's must-haves appear first.
 
 Reframe EVERY bullet for this role. Same real work, different angle. Every bullet must be reworded. Never copy verbatim.
 
-PROJECTS: Reorder by relevance. Drop irrelevant projects entirely.
+{projects_rule}
 
 BULLETS: Strong verb + what you built/led + quantified impact. Vary verbs (Built, Led, Designed, Implemented, Reduced, Automated, Deployed, Scaled, Drove, Delivered). Most relevant first. Max 4 per section.
 
@@ -153,6 +162,7 @@ def _build_judge_prompt(profile: dict) -> str:
     """Build the LLM judge prompt from the user's profile."""
     boundary = profile.get("skills_boundary", {})
     resume_facts = profile.get("resume_facts", {})
+    voice = profile.get("voice", "engineer")
 
     # Flatten allowed skills for the judge
     all_skills: list[str] = []
@@ -163,6 +173,15 @@ def _build_judge_prompt(profile: dict) -> str:
 
     real_metrics = resume_facts.get("real_metrics", [])
     metrics_str = ", ".join(real_metrics) if real_metrics else "N/A"
+
+    if voice == "executive":
+        fab_rule_1 = f"1. Adding domains, capabilities, or credentials to SKILLS & CAPABILITIES that aren't in the candidate's background. The candidate's real domains are ONLY: {skills_str}"
+        tolerance_skill = "- Connecting adjacent domains the candidate has demonstrably led is a MINOR STRETCH, not fabrication."
+        tolerance_learnable = "- Inferring reasonable capabilities from the candidate's established scope is a MINOR STRETCH."
+    else:
+        fab_rule_1 = f"1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the original. The allowed skills are ONLY: {skills_str}"
+        tolerance_skill = "- Adding a closely related tool the candidate could realistically know is a MINOR STRETCH, not fabrication."
+        tolerance_learnable = "- Adding any LEARNABLE skill given their existing stack is a MINOR STRETCH."
 
     return f"""You are a resume quality judge. A tailoring engine rewrote a resume to target a specific job. Your job is to catch LIES, not style changes.
 
@@ -180,7 +199,7 @@ ISSUES: (list any problems, or "none")
 - Change tone and wording extensively
 
 ## WHAT IS FABRICATION (FAIL for these):
-1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the original. The allowed skills are ONLY: {skills_str}
+{fab_rule_1}
 2. Inventing NEW metrics or numbers not in the original. The real metrics are: {metrics_str}
 3. Inventing work that has no basis in any original bullet (completely new achievements).
 4. Adding companies, roles, or degrees that don't exist.
@@ -197,9 +216,9 @@ ISSUES: (list any problems, or "none")
 
 ## TOLERANCE RULE:
 The goal is to get interviews, not to be a perfect fact-checker. Allow up to 3 minor stretches per resume:
-- Adding a closely related tool the candidate could realistically know is a MINOR STRETCH, not fabrication.
+{tolerance_skill}
 - Reframing a metric with slightly different wording is a MINOR STRETCH.
-- Adding any LEARNABLE skill given their existing stack is a MINOR STRETCH.
+{tolerance_learnable}
 - Only FAIL if there are MAJOR lies: completely invented projects, fake companies, fake degrees, wildly inflated numbers, or skills from a completely different domain.
 
 Be strict about major lies. Be lenient about minor stretches and learnable skills. Do not fail for style, tone, or restructuring."""
@@ -313,9 +332,15 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
             lines.append(f"- {sanitize_text(b)}")
         lines.append("")
 
-    # Projects
-    lines.append("PROJECTS")
-    for entry in data.get("projects", []):
+    # Projects / Key Initiatives (exec voice uses key_initiatives)
+    if profile.get("voice") == "executive":
+        proj_entries = data.get("key_initiatives") or data.get("projects", [])
+        proj_label = "KEY INITIATIVES"
+    else:
+        proj_entries = data.get("projects", [])
+        proj_label = "PROJECTS"
+    lines.append(proj_label)
+    for entry in proj_entries:
         lines.append(sanitize_text(entry.get("header", "")))
         if entry.get("subtitle"):
             lines.append(sanitize_text(entry["subtitle"]))
