@@ -124,6 +124,16 @@ def _setup_profile() -> dict:
         "current_title": Prompt.ask("Current/most recent job title", default=""),
     }
 
+    # -- Career Level (drives tailoring/cover letter voice) --
+    console.print("\n[bold cyan]Career Level[/bold cyan]")
+    console.print("[dim]Affects the voice and focus of tailored resumes and cover letters.[/dim]")
+    career_level = Prompt.ask(
+        "Career level",
+        choices=["engineer", "executive"],
+        default="engineer",
+    )
+    profile["voice"] = career_level
+
     # -- Skills Boundary --
     console.print("\n[bold cyan]Skills[/bold cyan] (comma-separated)")
     langs = Prompt.ask("Programming languages", default="")

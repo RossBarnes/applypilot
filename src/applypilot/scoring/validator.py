@@ -188,7 +188,8 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     # 1. Check required sections exist (flexible matching)
     section_variants: dict[str, list[str]] = {
         "SUMMARY": ["summary", "professional summary", "profile"],
-        "TECHNICAL SKILLS": ["technical skills", "skills", "tech stack", "core skills", "technologies"],
+        "TECHNICAL SKILLS": ["technical skills", "skills", "tech stack", "core skills", "technologies",
+                             "skills & capabilities", "capabilities", "leadership & capabilities"],
         "EXPERIENCE": ["experience", "work experience", "professional experience"],
         "PROJECTS": ["projects", "personal projects", "key projects", "selected projects"],
         "EDUCATION": ["education", "academic background"],
@@ -225,8 +226,12 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     if phone and phone not in text:
         warnings.append("Phone missing -- will be injected")
 
-    # 7. Scan TECHNICAL SKILLS section for fabricated tools
-    skills_start = text_lower.find("technical skills")
+    # 7. Scan TECHNICAL SKILLS / CAPABILITIES section for fabricated tools
+    skills_start = -1
+    for _skills_term in ("technical skills", "skills & capabilities", "capabilities"):
+        skills_start = text_lower.find(_skills_term)
+        if skills_start != -1:
+            break
     skills_end = text_lower.find("experience", skills_start) if skills_start != -1 else -1
     if skills_start != -1 and skills_end != -1:
         skills_block = text_lower[skills_start:skills_end]
