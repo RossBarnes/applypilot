@@ -37,10 +37,13 @@ def _build_tailor_prompt(profile: dict) -> str:
     """Build the resume tailoring system prompt from the user's profile.
 
     All skills boundaries, preserved entities, and formatting rules are
-    derived from the profile -- nothing is hardcoded.
+    derived from the profile -- nothing is hardcoded. Voice adapts based
+    on profile["voice"]: "executive" mode for C-suite/VP candidates,
+    "engineer" mode (default) for IC/senior roles.
     """
     boundary = profile.get("skills_boundary", {})
     resume_facts = profile.get("resume_facts", {})
+    voice = profile.get("voice", "engineer")
 
     # Format skills boundary for the prompt
     skills_lines = []
@@ -52,52 +55,96 @@ def _build_tailor_prompt(profile: dict) -> str:
 
     # Preserved entities
     companies = resume_facts.get("preserved_companies", [])
-    projects = resume_facts.get("preserved_projects", [])
     school = resume_facts.get("preserved_school", "")
     real_metrics = resume_facts.get("real_metrics", [])
 
     companies_str = ", ".join(companies) if companies else "N/A"
-    projects_str = ", ".join(projects) if projects else "N/A"
     metrics_str = ", ".join(real_metrics) if real_metrics else "N/A"
 
-    education = profile.get("experience", {})
-    education_level = education.get("education_level", "")
+    education_level = profile.get("experience", {}).get("education_level", "")
 
-    return f"""You are a senior technical recruiter rewriting a resume to get this person an interview.
+    # Dynamic skills schema keys from boundary (avoids hardcoded Languages/Frameworks for exec profiles)
+    if boundary:
+        schema_skills = {cat.replace("_", " ").title(): "..." for cat in boundary.keys()}
+    else:
+        schema_skills = {"Languages": "...", "Frameworks": "...", "Tools": "..."}
+    skills_schema_str = json.dumps(schema_skills)
 
-Take the base resume and job description. Return a tailored resume as a JSON object.
-
-## RECRUITER SCAN (6 seconds):
+    # Voice-specific sections
+    if voice == "executive":
+        persona = "You are a senior executive search consultant rewriting materials for a C-suite or VP-level candidate."
+        scan = """## EXECUTIVE RECRUITER SCAN (8 seconds):
+1. Title -- matches the seniority and function they're hiring?
+2. Summary -- P&L ownership, org scale, or strategic mandate clear in 2 sentences?
+3. First 3 bullets of most recent role -- scope, business impact, and outcomes with numbers?
+4. Capabilities -- leadership scale, domains, and strategic strengths prominent?"""
+        stretch_rule = "You MAY draw connections between adjacent domains the candidate has led. Do NOT invent credentials, certifications, or roles."
+        voice_guidance = """## VOICE:
+- Write like a seasoned executive. Direct, confident, concrete. Every claim anchored to scale or outcome.
+- GOOD: "Led $40M platform modernisation across 4 business units, reducing time-to-market by 35%"
+- BAD: "Leveraged cutting-edge AI technologies to drive transformative operational efficiencies"
+- NEVER use: passionate, dedicated, leveraging, spearheaded, robust, cutting-edge, proven track record, strong track record, eager, stakeholders, synergy, seamless, streamlined, end-to-end, detail-oriented, results-driven, I am confident, I believe, I am excited
+- No em dashes. Use commas, periods, or hyphens."""
+    else:
+        persona = "You are a senior technical recruiter rewriting a resume to get this person an interview."
+        scan = """## RECRUITER SCAN (6 seconds):
 1. Title -- matches what they're hiring?
 2. Summary -- 2 sentences proving you've done this work
 3. First 3 bullets of most recent role -- verbs and outcomes match?
-4. Skills -- must-haves visible immediately?
+4. Skills -- must-haves visible immediately?"""
+        stretch_rule = "You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, Redis if PostgreSQL). No unrelated languages/frameworks."
+        voice_guidance = """## VOICE:
+- Write like a real engineer. Short, direct.
+- GOOD: "Automated financial reporting with Python + API integrations, cut processing time from 10 hours to 2"
+- BAD: "Leveraged cutting-edge AI technologies to drive transformative operational efficiencies"
+- NEVER use: passionate, dedicated, leveraging, spearheaded, robust, cutting-edge, proven track record, strong track record, eager, stakeholders, synergy, seamless, streamlined, end-to-end, detail-oriented, results-driven, I am confident, I believe, I am excited
+- No em dashes. Use commas, periods, or hyphens."""
+
+    # Build the output schema example as a plain string (avoids f-string brace conflicts)
+    education_val = f"{school} | {education_level}" if school else education_level
+    if voice == "executive":
+        projects_example = '"key_initiatives":[{"header":"Initiative Name","subtitle":"Domain | Dates","bullets":["bullet 1","bullet 2"]}],'
+    else:
+        projects_example = '"projects":[{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}],'
+    output_example = (
+        '{"title":"Role Title","summary":"2-3 tailored sentences.",'
+        f'"skills":{skills_schema_str},'
+        '"experience":[{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}],'
+        + projects_example
+        + f'"education":"{education_val}"}}'
+    )
+
+    if voice == "executive":
+        projects_rule = "KEY INITIATIVES: Include the 2-3 most strategically relevant initiatives. Each should show business scope, mandate, and measurable outcome."
+    else:
+        projects_rule = "PROJECTS: Reorder by relevance. Drop irrelevant projects entirely."
+
+    return f"""{persona}
+
+Take the base resume and job description. Return a tailored resume as a JSON object.
+
+{scan}
 
 ## SKILLS BOUNDARY (real skills only):
 {skills_block}
 
-You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, Redis if PostgreSQL). No unrelated languages/frameworks.
+{stretch_rule}
 
 ## TAILORING RULES:
 
-TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
+TITLE: Match the target role. Keep seniority (Senior/Lead/Staff/VP/CTO/Head of). Drop company suffixes and team names.
 
-SUMMARY: Rewrite from scratch. Lead with the 1-2 skills that matter most for THIS role. Sound like someone who's done this job.
+SUMMARY: Rewrite from scratch. Lead with the 1-2 strengths that matter most for THIS role. Sound like someone who has done this job.
 
 SKILLS: Reorder each category so the job's must-haves appear first.
 
 Reframe EVERY bullet for this role. Same real work, different angle. Every bullet must be reworded. Never copy verbatim.
 
-PROJECTS: Reorder by relevance. Drop irrelevant projects entirely.
+{projects_rule}
 
-BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized). Most relevant first. Max 4 per section.
+BULLETS: Strong verb + what you built/led + quantified impact. Vary verbs (Built, Led, Designed, Implemented, Reduced, Automated, Deployed, Scaled, Drove, Delivered). Most relevant first. Max 4 per section.
 
-## VOICE:
-- Write like a real engineer. Short, direct.
-- GOOD: "Automated financial reporting with Python + API integrations, cut processing time from 10 hours to 2"
-- BAD: "Leveraged cutting-edge AI technologies to drive transformative operational efficiencies"
-- NEVER use: passionate, dedicated, leveraging, spearheaded, robust, cutting-edge, proven track record, strong track record, eager, stakeholders, synergy, seamless, streamlined, end-to-end, detail-oriented, results-driven, I am confident, I believe, I am excited
-- No em dashes. Use commas, periods, or hyphens.
+{voice_guidance}
 
 ## HARD RULES:
 - Do NOT invent work, companies, degrees, or certifications
@@ -108,13 +155,14 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
-{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
+{output_example}"""
 
 
 def _build_judge_prompt(profile: dict) -> str:
     """Build the LLM judge prompt from the user's profile."""
     boundary = profile.get("skills_boundary", {})
     resume_facts = profile.get("resume_facts", {})
+    voice = profile.get("voice", "engineer")
 
     # Flatten allowed skills for the judge
     all_skills: list[str] = []
@@ -125,6 +173,15 @@ def _build_judge_prompt(profile: dict) -> str:
 
     real_metrics = resume_facts.get("real_metrics", [])
     metrics_str = ", ".join(real_metrics) if real_metrics else "N/A"
+
+    if voice == "executive":
+        fab_rule_1 = f"1. Adding domains, capabilities, or credentials to SKILLS & CAPABILITIES that aren't in the candidate's background. The candidate's real domains are ONLY: {skills_str}"
+        tolerance_skill = "- Connecting adjacent domains the candidate has demonstrably led is a MINOR STRETCH, not fabrication."
+        tolerance_learnable = "- Inferring reasonable capabilities from the candidate's established scope is a MINOR STRETCH."
+    else:
+        fab_rule_1 = f"1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the original. The allowed skills are ONLY: {skills_str}"
+        tolerance_skill = "- Adding a closely related tool the candidate could realistically know is a MINOR STRETCH, not fabrication."
+        tolerance_learnable = "- Adding any LEARNABLE skill given their existing stack is a MINOR STRETCH."
 
     return f"""You are a resume quality judge. A tailoring engine rewrote a resume to target a specific job. Your job is to catch LIES, not style changes.
 
@@ -142,7 +199,7 @@ ISSUES: (list any problems, or "none")
 - Change tone and wording extensively
 
 ## WHAT IS FABRICATION (FAIL for these):
-1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the original. The allowed skills are ONLY: {skills_str}
+{fab_rule_1}
 2. Inventing NEW metrics or numbers not in the original. The real metrics are: {metrics_str}
 3. Inventing work that has no basis in any original bullet (completely new achievements).
 4. Adding companies, roles, or degrees that don't exist.
@@ -159,9 +216,9 @@ ISSUES: (list any problems, or "none")
 
 ## TOLERANCE RULE:
 The goal is to get interviews, not to be a perfect fact-checker. Allow up to 3 minor stretches per resume:
-- Adding a closely related tool the candidate could realistically know is a MINOR STRETCH, not fabrication.
+{tolerance_skill}
 - Reframing a metric with slightly different wording is a MINOR STRETCH.
-- Adding any LEARNABLE skill given their existing stack is a MINOR STRETCH.
+{tolerance_learnable}
 - Only FAIL if there are MAJOR lies: completely invented projects, fake companies, fake degrees, wildly inflated numbers, or skills from a completely different domain.
 
 Be strict about major lies. Be lenient about minor stretches and learnable skills. Do not fail for style, tone, or restructuring."""
@@ -257,8 +314,9 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
     lines.append(sanitize_text(data["summary"]))
     lines.append("")
 
-    # Technical Skills
-    lines.append("TECHNICAL SKILLS")
+    # Skills section — label adapts to career level
+    skills_label = "SKILLS & CAPABILITIES" if profile.get("voice") == "executive" else "TECHNICAL SKILLS"
+    lines.append(skills_label)
     if isinstance(data["skills"], dict):
         for cat, val in data["skills"].items():
             lines.append(f"{cat}: {sanitize_text(str(val))}")
@@ -274,9 +332,15 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
             lines.append(f"- {sanitize_text(b)}")
         lines.append("")
 
-    # Projects
-    lines.append("PROJECTS")
-    for entry in data.get("projects", []):
+    # Projects / Key Initiatives (exec voice uses key_initiatives)
+    if profile.get("voice") == "executive":
+        proj_entries = data.get("key_initiatives") or data.get("projects", [])
+        proj_label = "KEY INITIATIVES"
+    else:
+        proj_entries = data.get("projects", [])
+        proj_label = "PROJECTS"
+    lines.append(proj_label)
+    for entry in proj_entries:
         lines.append(sanitize_text(entry.get("header", "")))
         if entry.get("subtitle"):
             lines.append(sanitize_text(entry["subtitle"]))
@@ -358,9 +422,10 @@ def tailor_resume(
     Returns:
         (tailored_text, report) where report contains validation details.
     """
+    company_display = job.get("company") or job.get("site", "")
     job_text = (
         f"TITLE: {job['title']}\n"
-        f"COMPANY: {job['site']}\n"
+        f"COMPANY: {company_display}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )

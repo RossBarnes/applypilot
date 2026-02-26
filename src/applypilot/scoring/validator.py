@@ -104,9 +104,12 @@ def validate_json_fields(data: dict, profile: dict) -> dict:
     warnings: list[str] = []
 
     # Required keys
-    for key in ("title", "summary", "skills", "experience", "projects", "education"):
+    for key in ("title", "summary", "skills", "experience", "education"):
         if key not in data or not data[key]:
             errors.append(f"Missing required field: {key}")
+    # Projects or key_initiatives (exec voice uses key_initiatives)
+    if not data.get("projects") and not data.get("key_initiatives"):
+        errors.append("Missing required field: projects (or key_initiatives for executive profiles)")
     if errors:
         return {"passed": False, "errors": errors, "warnings": warnings}
 
@@ -138,9 +141,10 @@ def validate_json_fields(data: dict, profile: dict) -> dict:
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
 
-    # Projects: collect bullets
-    if isinstance(data["projects"], list):
-        for entry in data["projects"]:
+    # Projects or key_initiatives: collect bullets
+    proj_data = data.get("projects") or data.get("key_initiatives") or []
+    if isinstance(proj_data, list):
+        for entry in proj_data:
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
 
@@ -188,9 +192,11 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     # 1. Check required sections exist (flexible matching)
     section_variants: dict[str, list[str]] = {
         "SUMMARY": ["summary", "professional summary", "profile"],
-        "TECHNICAL SKILLS": ["technical skills", "skills", "tech stack", "core skills", "technologies"],
+        "TECHNICAL SKILLS": ["technical skills", "skills", "tech stack", "core skills", "technologies",
+                             "skills & capabilities", "capabilities", "leadership & capabilities"],
         "EXPERIENCE": ["experience", "work experience", "professional experience"],
-        "PROJECTS": ["projects", "personal projects", "key projects", "selected projects"],
+        "PROJECTS": ["projects", "personal projects", "key projects", "selected projects",
+                     "key initiatives", "strategic initiatives", "key programs"],
         "EDUCATION": ["education", "academic background"],
     }
     for section, variants in section_variants.items():
@@ -225,8 +231,12 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     if phone and phone not in text:
         warnings.append("Phone missing -- will be injected")
 
-    # 7. Scan TECHNICAL SKILLS section for fabricated tools
-    skills_start = text_lower.find("technical skills")
+    # 7. Scan TECHNICAL SKILLS / CAPABILITIES section for fabricated tools
+    skills_start = -1
+    for _skills_term in ("technical skills", "skills & capabilities", "capabilities"):
+        skills_start = text_lower.find(_skills_term)
+        if skills_start != -1:
+            break
     skills_end = text_lower.find("experience", skills_start) if skills_start != -1 else -1
     if skills_start != -1 and skills_end != -1:
         skills_block = text_lower[skills_start:skills_end]
@@ -260,7 +270,7 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
         errors.append(f"LLM self-talk: '{found_leaks[0]}'")
 
     # 12. Duplicate section detection
-    for section_name in ["summary", "experience", "education", "projects"]:
+    for section_name in ["summary", "experience", "education", "projects", "key initiatives"]:
         count = text_lower.count(f"\n{section_name}\n") + text_lower.count(f"\n{section_name} \n")
         if text_lower.startswith(f"{section_name}\n"):
             count += 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -88,12 +89,12 @@ def run(
     stream: bool = typer.Option(False, "--stream", help="Run stages concurrently (streaming mode)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview stages without executing."),
 ) -> None:
-    """Run pipeline stages: discover, enrich, score, tailor, cover, pdf."""
+    """Run pipeline stages. Defaults to discover, enrich, score. Use 'all' for the full pipeline including tailoring and auto-apply prep."""
     _bootstrap()
 
     from applypilot.pipeline import run_pipeline
 
-    stage_list = stages if stages else ["all"]
+    stage_list = stages if stages else ["discover", "enrich", "score"]
 
     # Validate stage names
     for s in stage_list:
@@ -310,6 +311,154 @@ def dashboard() -> None:
     from applypilot.view import open_dashboard
 
     open_dashboard()
+
+
+@app.command()
+def schedule(
+    remove: bool = typer.Option(False, "--remove", help="Remove the scheduled pipeline run."),
+    day: str = typer.Option("sunday", "--day", help="Day of week to run (e.g. sunday, monday)."),
+    time: str = typer.Option("20:00", "--time", help="Time to run in HH:MM 24h format."),
+) -> None:
+    """Install (or remove) a cron job to run the full pipeline automatically."""
+    import shutil
+    import subprocess
+    import sys
+
+    if not shutil.which("crontab"):
+        console.print(
+            "[red]crontab not available.[/red] "
+            "On Windows, use Task Scheduler instead:\n"
+            "  schtasks /create /tn ApplyPilot /tr \"applypilot run all\" /sc WEEKLY /d SUN /st 20:00"
+        )
+        raise typer.Exit(code=1)
+
+    MARKER = "# applypilot-schedule"
+
+    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    existing = result.stdout if result.returncode == 0 else ""
+    lines = [l for l in existing.splitlines() if MARKER not in l]
+
+    if remove:
+        new_crontab = "\n".join(lines) + ("\n" if lines else "")
+        subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)
+        console.print("[green]Schedule removed.[/green]")
+        return
+
+    day_map = {
+        "sunday": 0, "sun": 0,
+        "monday": 1, "mon": 1,
+        "tuesday": 2, "tue": 2,
+        "wednesday": 3, "wed": 3,
+        "thursday": 4, "thu": 4,
+        "friday": 5, "fri": 5,
+        "saturday": 6, "sat": 6,
+    }
+    day_num = day_map.get(day.lower())
+    if day_num is None:
+        console.print(f"[red]Unknown day:[/red] '{day}'. Use e.g. sunday, monday.")
+        raise typer.Exit(code=1)
+
+    try:
+        hour, minute = time.split(":")
+        hour, minute = int(hour), int(minute)
+    except ValueError:
+        console.print(f"[red]Invalid time:[/red] '{time}'. Use HH:MM (e.g. 20:00).")
+        raise typer.Exit(code=1)
+
+    from applypilot.config import APP_DIR, LOG_DIR
+    binary = shutil.which("applypilot") or f"{sys.executable} -m applypilot"
+    log_file = LOG_DIR / "cron.log"
+
+    cron_line = f"{minute} {hour} * * {day_num} {binary} run all >> {log_file} 2>&1  {MARKER}"
+    lines.append(cron_line)
+    subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", text=True, check=True)
+
+    day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    console.print(f"\n[green]Schedule installed.[/green]")
+    console.print(f"  Runs:    every {day_names[day_num]} at {time}")
+    console.print(f"  Command: {binary} run all")
+    console.print(f"  Log:     {log_file}")
+    console.print(f"\nRun [bold]applypilot schedule --remove[/bold] to uninstall.")
+
+
+@app.command()
+def ready(
+    limit: int = typer.Option(25, "--limit", "-l", help="Max jobs to show."),
+    min_score: int = typer.Option(7, "--min-score", help="Minimum fit score."),
+    open_n: Optional[int] = typer.Option(None, "--open", "-o", help="Open job #N's application URL in your browser."),
+) -> None:
+    """List jobs with tailored resumes and cover letters ready for manual application."""
+    _bootstrap()
+
+    from applypilot.database import get_connection
+
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT title, company, fit_score, application_url,
+               tailored_resume_path, cover_letter_path, url
+        FROM jobs
+        WHERE tailored_resume_path IS NOT NULL
+          AND cover_letter_path IS NOT NULL
+          AND applied_at IS NULL
+          AND fit_score >= ?
+        ORDER BY fit_score DESC, discovered_at DESC
+        LIMIT ?
+        """,
+        (min_score, limit),
+    ).fetchall()
+
+    if not rows:
+        console.print(
+            "[yellow]No jobs ready.[/yellow]\n"
+            "Run [bold]applypilot run all[/bold] to discover and prepare applications."
+        )
+        return
+
+    if open_n is not None:
+        idx = open_n - 1
+        if 0 <= idx < len(rows):
+            import webbrowser
+            target = rows[idx]["application_url"] or rows[idx]["url"]
+            webbrowser.open(target)
+            console.print(f"[green]Opened:[/green] {target}")
+        else:
+            console.print(f"[red]No job #{open_n}.[/red] Valid range: 1–{len(rows)}")
+        return
+
+    console.print(f"\n[bold]{len(rows)} job(s) ready to apply[/bold]\n")
+
+    table = Table(show_header=True, header_style="bold cyan", show_lines=True)
+    table.add_column("#", justify="right", style="dim", width=3)
+    table.add_column("Score", justify="center", width=6)
+    table.add_column("Role", min_width=22)
+    table.add_column("Company", min_width=16)
+    table.add_column("Resume / Cover", min_width=28)
+    table.add_column("Apply URL")
+
+    for i, row in enumerate(rows, 1):
+        score = row["fit_score"] or 0
+        score_color = "green" if score >= 8 else "yellow" if score >= 6 else "red"
+        resume = Path(row["tailored_resume_path"]).name if row["tailored_resume_path"] else "—"
+        cover = Path(row["cover_letter_path"]).name if row["cover_letter_path"] else "—"
+        apply_url = row["application_url"] or row["url"] or "—"
+
+        table.add_row(
+            str(i),
+            f"[{score_color}]{score}[/{score_color}]",
+            row["title"] or "—",
+            row["company"] or "—",
+            f"R: {resume}\nC: {cover}",
+            apply_url,
+        )
+
+    console.print(table)
+    console.print(
+        "\n[dim]Open a job in your browser:  [bold]applypilot ready --open N[/bold][/dim]"
+    )
+    console.print(
+        "[dim]Mark done after submitting:   [bold]applypilot apply --mark-applied URL[/bold][/dim]\n"
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from applypilot.config import COVER_LETTER_DIR, RESUME_PATH, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
@@ -31,10 +32,13 @@ def _build_cover_letter_prompt(profile: dict) -> str:
     """Build the cover letter system prompt from the user's profile.
 
     All personal data, skills, and sign-off name come from the profile.
+    Voice adapts based on profile["voice"]: "executive" mode for C-suite/VP
+    candidates, "engineer" mode (default) for IC/senior roles.
     """
     personal = profile.get("personal", {})
     boundary = profile.get("skills_boundary", {})
     resume_facts = profile.get("resume_facts", {})
+    voice = profile.get("voice", "engineer")
 
     # Preferred name for the sign-off (falls back to full name)
     sign_off_name = personal.get("preferred_name") or personal.get("full_name", "")
@@ -44,30 +48,55 @@ def _build_cover_letter_prompt(profile: dict) -> str:
     for items in boundary.values():
         if isinstance(items, list):
             all_skills.extend(items)
-    skills_str = ", ".join(all_skills) if all_skills else "the tools listed in the resume"
+    skills_str = ", ".join(all_skills) if all_skills else "the capabilities listed in the resume"
 
     # Real metrics from resume_facts
     real_metrics = resume_facts.get("real_metrics", [])
     preserved_projects = resume_facts.get("preserved_projects", [])
 
-    # Build achievement examples for the prompt
     projects_hint = ""
     if preserved_projects:
-        projects_hint = f"\nKnown projects to reference: {', '.join(preserved_projects)}"
+        projects_hint = f"\nKnown projects/initiatives to reference: {', '.join(preserved_projects)}"
 
     metrics_hint = ""
     if real_metrics:
         metrics_hint = f"\nReal metrics to use: {', '.join(real_metrics)}"
 
+    # Voice-specific paragraph guidance and sentence rule
+    if voice == "executive":
+        para1_guidance = "PARAGRAPH 1 (2-3 sentences): Open with a specific initiative or outcome YOU delivered that solves THEIR strategic problem. Not \"I'm excited about this role.\" Not \"This role aligns with my experience.\" Start with the outcome."
+        para2_guidance = f"PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS role. Anchor every claim to scale (team size, revenue, budget, org scope) or a measurable outcome. Frame as solving their problem, not listing accomplishments.{projects_hint}{metrics_hint}"
+        para3_guidance = "PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job description (a strategic challenge, a market position, a product mandate). Then close. \"Happy to walk through any of this in more detail.\" or \"Let's discuss.\" Nothing else."
+        voice_guidance = """VOICE:
+- Write like a seasoned executive writing to a peer or hiring committee. Direct, authoritative, grounded in outcomes.
+- NEVER narrate. BAD: "This demonstrates my leadership." GOOD: Just state the outcome.
+- NEVER hedge. BAD: "might address some of your challenges." GOOD: "solves the same problem your board is facing."
+- NEVER use "Also," to start a sentence. NEVER use "Furthermore," or "Additionally,".
+- Every sentence should anchor to scale (team size, revenue, budget, org scope) or a specific outcome. If it doesn't, cut it.
+- Read it out loud. If it sounds like a consultant's pitch deck, rewrite it."""
+        fabrication_rule = f"FABRICATION = INSTANT REJECTION:\nThe candidate's real capabilities are ONLY those listed in their resume and: {skills_str}.\nDo NOT invent credentials, roles, or capabilities not evidenced in their background."
+    else:
+        para1_guidance = "PARAGRAPH 1 (2-3 sentences): Open with a specific thing YOU built that solves THEIR problem. Not \"I'm excited about this role.\" Not \"This role aligns with my experience.\" Start with the work."
+        para2_guidance = f"PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS job. Use numbers. Frame as solving their problem, not listing your accomplishments.{projects_hint}{metrics_hint}"
+        para3_guidance = "PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job description (a product, a technical challenge, a team structure). Then close. \"Happy to walk through any of this in more detail.\" or \"Let's discuss.\" Nothing else."
+        voice_guidance = """VOICE:
+- Write like a real engineer emailing someone they respect. Not formal, not casual. Just direct.
+- NEVER narrate or explain what you're doing. BAD: "This demonstrates my commitment to X." GOOD: Just state the fact and move on.
+- NEVER hedge. BAD: "might address some of your challenges." GOOD: "solves the same problem your team is facing."
+- NEVER use "Also," to start a sentence. NEVER use "Furthermore," or "Additionally,".
+- Every sentence should contain either a number, a tool name, or a specific outcome. If it doesn't, cut it.
+- Read it out loud. If it sounds like a robot wrote it, rewrite it."""
+        fabrication_rule = f"FABRICATION = INSTANT REJECTION:\nThe candidate's real tools are ONLY: {skills_str}.\nDo NOT mention ANY tool not in this list. If the job asks for tools not listed, talk about the work you did, not the tools."
+
     return f"""Write a cover letter for {sign_off_name}. The goal is to get an interview.
 
 STRUCTURE: 3 short paragraphs. Under 250 words. Every sentence must earn its place.
 
-PARAGRAPH 1 (2-3 sentences): Open with a specific thing YOU built that solves THEIR problem. Not "I'm excited about this role." Not "This role aligns with my experience." Start with the work.
+{para1_guidance}
 
-PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS job. Use numbers. Frame as solving their problem, not listing your accomplishments.{projects_hint}{metrics_hint}
+{para2_guidance}
 
-PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job description (a product, a technical challenge, a team structure). Then close. "Happy to walk through any of this in more detail." or "Let's discuss." Nothing else.
+{para3_guidance}
 
 BANNED WORDS/PHRASES (using ANY of these = instant rejection):
 "resonated", "aligns with", "passionate", "eager", "eager to", "excited to apply", "I am confident",
@@ -79,13 +108,7 @@ BANNED WORDS/PHRASES (using ANY of these = instant rejection):
 
 BANNED PUNCTUATION: No em dashes. Use commas or periods.
 
-VOICE:
-- Write like a real engineer emailing someone they respect. Not formal, not casual. Just direct.
-- NEVER narrate or explain what you're doing. BAD: "This demonstrates my commitment to X." GOOD: Just state the fact and move on.
-- NEVER hedge. BAD: "might address some of your challenges." GOOD: "solves the same problem your team is facing."
-- NEVER use "Also," to start a sentence. NEVER use "Furthermore," or "Additionally,".
-- Every sentence should contain either a number, a tool name, or a specific outcome. If it doesn't, cut it.
-- Read it out loud. If it sounds like a robot wrote it, rewrite it.
+{voice_guidance}
 
 ADDITIONAL BANNED PHRASES:
 "This demonstrates", "This reflects", "This showcases", "This shows",
@@ -94,9 +117,7 @@ ADDITIONAL BANNED PHRASES:
 "which directly addresses", "I have experience with",
 "Also,", "Furthermore,", "Additionally,", "Moreover,"
 
-FABRICATION = INSTANT REJECTION:
-The candidate's real tools are ONLY: {skills_str}.
-Do NOT mention ANY tool not in this list. If the job asks for tools not listed, talk about the work you did, not the tools.
+{fabrication_rule}
 
 Sign off: just "{sign_off_name}"
 
@@ -122,9 +143,10 @@ def generate_cover_letter(
     Returns:
         The cover letter text (best attempt even if validation failed).
     """
+    company_display = job.get("company") or job.get("site", "")
     job_text = (
         f"TITLE: {job['title']}\n"
-        f"COMPANY: {job['site']}\n"
+        f"COMPANY: {company_display}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )
@@ -180,7 +202,7 @@ def run_cover_letters(min_score: int = 7, limit: int = 20) -> dict:
         {"generated": int, "errors": int, "elapsed": float}
     """
     profile = load_profile()
-    resume_text = RESUME_PATH.read_text(encoding="utf-8")
+    master_resume_text = RESUME_PATH.read_text(encoding="utf-8")
     conn = get_connection()
 
     # Fetch jobs that have tailored resumes but no cover letter yet
@@ -216,6 +238,13 @@ def run_cover_letters(min_score: int = 7, limit: int = 20) -> dict:
     for job in jobs:
         completed += 1
         try:
+            # Use tailored resume if available; fall back to master resume
+            tailored_path = job.get("tailored_resume_path")
+            try:
+                resume_text = Path(tailored_path).read_text(encoding="utf-8") if tailored_path else master_resume_text
+            except OSError:
+                resume_text = master_resume_text
+
             letter = generate_cover_letter(resume_text, job, profile)
 
             # Build safe filename prefix
